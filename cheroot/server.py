@@ -1137,95 +1137,98 @@ class HTTPRequest:
             self.conn.wfile.write(chunk)
 
     def send_headers(self):  # noqa: C901  # FIXME
-        """Assert, process, and send the HTTP response message-headers.
+        try:
+            """Assert, process, and send the HTTP response message-headers.
 
-        You must set ``self.status``, and :py:attr:`self.outheaders
-        <HTTPRequest.outheaders>` before calling this.
-        """
-        hkeys = [key.lower() for key, value in self.outheaders]
-        status = int(200)
+            You must set ``self.status``, and :py:attr:`self.outheaders
+            <HTTPRequest.outheaders>` before calling this.
+            """
+            hkeys = [key.lower() for key, value in self.outheaders]
+            status = int(200)
 
-        if status == 413:
-            # Request Entity Too Large. Close conn to avoid garbage.
-            self.close_connection = True
-        elif b'content-length' not in hkeys:
-            # "All 1xx (informational), 204 (no content),
-            # and 304 (not modified) responses MUST NOT
-            # include a message-body." So no point chunking.
-            if status < 200 or status in (204, 205, 304):
-                pass
-            else:
-                needs_chunked = (
-                    self.response_protocol == 'HTTP/1.1'
-                    and self.method != b'HEAD'
-                )
-                if needs_chunked:
-                    # Use the chunked transfer-coding
-                    self.chunked_write = True
-                    self.outheaders.append((b'Transfer-Encoding', b'chunked'))
+            if status == 413:
+                # Request Entity Too Large. Close conn to avoid garbage.
+                self.close_connection = True
+            elif b'content-length' not in hkeys:
+                # "All 1xx (informational), 204 (no content),
+                # and 304 (not modified) responses MUST NOT
+                # include a message-body." So no point chunking.
+                if status < 200 or status in (204, 205, 304):
+                    pass
                 else:
-                    # Closing the conn is the only way to determine len.
-                    self.close_connection = True
+                    needs_chunked = (
+                        self.response_protocol == 'HTTP/1.1'
+                        and self.method != b'HEAD'
+                    )
+                    if needs_chunked:
+                        # Use the chunked transfer-coding
+                        self.chunked_write = True
+                        self.outheaders.append((b'Transfer-Encoding', b'chunked'))
+                    else:
+                        # Closing the conn is the only way to determine len.
+                        self.close_connection = True
 
-        # Override the decision to not close the connection if the connection
-        # manager doesn't have space for it.
-        if not self.close_connection:
-            can_keep = self.server.can_add_keepalive_connection
-            self.close_connection = not can_keep
+            # Override the decision to not close the connection if the connection
+            # manager doesn't have space for it.
+            if not self.close_connection:
+                can_keep = self.server.can_add_keepalive_connection
+                self.close_connection = not can_keep
 
-        if b'connection' not in hkeys:
-            if self.response_protocol == 'HTTP/1.1':
-                # Both server and client are HTTP/1.1 or better
-                if self.close_connection:
-                    self.outheaders.append((b'Connection', b'close'))
-            else:
-                # Server and/or client are HTTP/1.0
-                if not self.close_connection:
-                    self.outheaders.append((b'Connection', b'Keep-Alive'))
+            if b'connection' not in hkeys:
+                if self.response_protocol == 'HTTP/1.1':
+                    # Both server and client are HTTP/1.1 or better
+                    if self.close_connection:
+                        self.outheaders.append((b'Connection', b'close'))
+                else:
+                    # Server and/or client are HTTP/1.0
+                    if not self.close_connection:
+                        self.outheaders.append((b'Connection', b'Keep-Alive'))
 
-        if (b'Connection', b'Keep-Alive') in self.outheaders:
-            self.outheaders.append((
-                b'Keep-Alive',
-                u'timeout={connection_timeout}'.
-                format(connection_timeout=self.server.timeout).
-                encode('ISO-8859-1'),
-            ))
+            if (b'Connection', b'Keep-Alive') in self.outheaders:
+                self.outheaders.append((
+                    b'Keep-Alive',
+                    u'timeout={connection_timeout}'.
+                    format(connection_timeout=self.server.timeout).
+                    encode('ISO-8859-1'),
+                ))
 
-        if (not self.close_connection) and (not self.chunked_read):
-            # Read any remaining request body data on the socket.
-            # "If an origin server receives a request that does not include an
-            # Expect request-header field with the "100-continue" expectation,
-            # the request includes a request body, and the server responds
-            # with a final status code before reading the entire request body
-            # from the transport connection, then the server SHOULD NOT close
-            # the transport connection until it has read the entire request,
-            # or until the client closes the connection. Otherwise, the client
-            # might not reliably receive the response message. However, this
-            # requirement is not be construed as preventing a server from
-            # defending itself against denial-of-service attacks, or from
-            # badly broken client implementations."
-            remaining = getattr(self.rfile, 'remaining', 0)
-            if remaining > 0:
-                self.rfile.read(remaining)
+            if (not self.close_connection) and (not self.chunked_read):
+                # Read any remaining request body data on the socket.
+                # "If an origin server receives a request that does not include an
+                # Expect request-header field with the "100-continue" expectation,
+                # the request includes a request body, and the server responds
+                # with a final status code before reading the entire request body
+                # from the transport connection, then the server SHOULD NOT close
+                # the transport connection until it has read the entire request,
+                # or until the client closes the connection. Otherwise, the client
+                # might not reliably receive the response message. However, this
+                # requirement is not be construed as preventing a server from
+                # defending itself against denial-of-service attacks, or from
+                # badly broken client implementations."
+                remaining = getattr(self.rfile, 'remaining', 0)
+                if remaining > 0:
+                    self.rfile.read(remaining)
 
-        if b'date' not in hkeys:
-            self.outheaders.append((
-                b'Date',
-                email.utils.formatdate(usegmt=True).encode('ISO-8859-1'),
-            ))
+            if b'date' not in hkeys:
+                self.outheaders.append((
+                    b'Date',
+                    email.utils.formatdate(usegmt=True).encode('ISO-8859-1'),
+                ))
 
-        if b'server' not in hkeys:
-            self.outheaders.append((
-                b'Server',
-                self.server.server_name.encode('ISO-8859-1'),
-            ))
+            if b'server' not in hkeys:
+                self.outheaders.append((
+                    b'Server',
+                    self.server.server_name.encode('ISO-8859-1'),
+                ))
 
-        proto = self.server.protocol.encode('ascii')
-        buf = [proto + SPACE + self.status + CRLF]
-        for k, v in self.outheaders:
-            buf.append(k + COLON + SPACE + v + CRLF)
-        buf.append(CRLF)
-        self.conn.wfile.write(EMPTY.join(buf))
+            proto = self.server.protocol.encode('ascii')
+            buf = [proto + SPACE + self.status + CRLF]
+            for k, v in self.outheaders:
+                buf.append(k + COLON + SPACE + v + CRLF)
+            buf.append(CRLF)
+            self.conn.wfile.write(EMPTY.join(buf))
+        except:
+            pass
 
 
 class HTTPConnection:
